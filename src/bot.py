@@ -7,7 +7,8 @@ from telegram.ext import CallbackQueryHandler, ConversationHandler, filters
 from src.config.config import Config
 from src.models.player import PlayerManager
 from src.utils.database import DatabaseHandler
-from src.handlers.command_handler import CommandHandler
+from src.services.player_service import PlayerService
+from src.handlers.command_handler import CommandHandler, SETTING_NICKNAME, SETTING_BIO, SETTING_INTERESTS
 
 # Set up logging
 Config.setup_directories()
@@ -24,24 +25,23 @@ def main():
     # Initialize components
     player_manager = PlayerManager()
     db_handler = DatabaseHandler(player_manager)
-    command_handler = CommandHandler(player_manager, db_handler)
+    player_service = PlayerService(player_manager, db_handler)
+    command_handler = CommandHandler(player_service)
     
-    # Load data
-    try:
-        db_handler.load_players()
-        db_handler.load_chat_ids()
-    except Exception as e:
-        logger.error(f"Failed to load data: {e}")
+    # Initialize data
+    if not player_service.initialize_data():
+        logger.error("Failed to initialize data. Exiting...")
         return
     
     # Initialize bot
     application = Application.builder().token(Config.BOT_TOKEN).build()
     
-    # Add command handlers
+    # Add basic command handlers
     application.add_handler(TelegramCommandHandler("start", command_handler.start))
+    application.add_handler(TelegramCommandHandler("profile", command_handler.profile_command))
     
     # Add conversation handler for sending messages
-    conv_handler = ConversationHandler(
+    send_handler = ConversationHandler(
         entry_points=[TelegramCommandHandler("send", command_handler.send_command)],
         states={
             Config.CHOOSING: [
@@ -58,7 +58,26 @@ def main():
         fallbacks=[TelegramCommandHandler("cancel", command_handler.cancel)]
     )
     
-    application.add_handler(conv_handler)
+    # Add conversation handler for profile setup
+    setup_handler = ConversationHandler(
+        entry_points=[TelegramCommandHandler("setup", command_handler.setup_command)],
+        states={
+            SETTING_NICKNAME: [
+                TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, command_handler.handle_nickname)
+            ],
+            SETTING_BIO: [
+                TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, command_handler.handle_bio)
+            ],
+            SETTING_INTERESTS: [
+                TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, command_handler.handle_interests)
+            ]
+        },
+        fallbacks=[TelegramCommandHandler("cancel", command_handler.cancel)]
+    )
+    
+    # Add all handlers
+    application.add_handler(send_handler)
+    application.add_handler(setup_handler)
     
     # Start the bot
     logger.info("Starting bot...")
